@@ -4,6 +4,7 @@ import gymnasium as gym
 
 
 from stable_baselines3 import DQN, PPO, A2C
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
 
 from mapping_custom_env import CustomRLEnvironment, lrsched
@@ -31,6 +32,8 @@ M = data["Graph"]["M"]
 # Initialize the adjacency matrix with zeros
 adj_matrix = np.zeros((P, P))
 
+seed = 42
+
 # Populate the adjacency matrix with edge weights (volume)
 edges = data["Graph"]["comms"]["edges"]
 volume = data["Graph"]["comms"]["volume"]
@@ -46,18 +49,20 @@ for edge, msg_volume in zip(edges, volume):
 env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs)
 
 
-
-model = DQN(policy="MlpPolicy",
+model = PPO(policy="MlpPolicy",
             env=env,
-            #learning_rate=0.00003,
-            learning_rate=lrsched(),
+            #learning_rate=0.00001,
+            #learning_rate=lrsched(decay_rate=5.0),
             #policy_kwargs=dict(optimizer_class=RMSpropTFLike),
-            learning_starts=25000,
+            #policy_kwargs=dict(net_arch=[32,32]),
+            #learning_starts=15000,
             tensorboard_log="./tensorboard_16_8/",
             verbose=1,
+            #seed=seed,
             device='cpu')
-trained = model.learn(total_timesteps=200000, log_interval=1)
+trained = model.learn(total_timesteps=2000000, log_interval=1)
 
+trained.save("last.model")
 
 terminated = False
 truncated = False

@@ -6,12 +6,13 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from gymnasium.spaces import Discrete, MultiDiscrete
 
 DEBUG = False
+NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
     
-    def __init__(self, P, M, node_capacity, adj_matrix, n_msgs):
+    def __init__(self, P, M, node_capacity, adj_matrix, n_msgs, seed = None):
         super(CustomRLEnvironment, self).__init__()
-        self.seed = 0
+        self.seed = seed
         self.P = P
         self.M = M
         # Save init array for environment reset
@@ -25,11 +26,6 @@ class CustomRLEnvironment(gym.Env):
         self.action_space = Discrete(self.P * self.M)
         self.observation_space = MultiDiscrete([self.M + 2] * self.P)
         self.total_comms = len(self.adj_matrix)
-
-        #FIXME observation space es correcto?
-        # self.observation_space = gym.spaces.MultiDiscrete(
-        #     [self.M + 2 for _ in range(self.P)]
-        # )
 
     def reset(self, seed=None, options=None):
         # FIXME new episode. Should start from last done state or re-init values? 
@@ -56,7 +52,9 @@ class CustomRLEnvironment(gym.Env):
             self.current_assignment[process_id] = node_id
             self.node_capacity[node_id] -= 1
         
+        
         reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms)
+        reward *= 100
 
         # Check if all processes have been assigned and done with an episode
         full_capacity = np.all(self.node_capacity == 0)
@@ -88,6 +86,7 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
     positions_nulled += 1
 
     total_assigned = np.count_nonzero(positions_nulled)
+    unassigned = len(positions_nulled) - total_assigned
 
     # Create a mask for positions where processes are different
     mask_0 = np.logical_and(positions_nulled[:, None], positions_nulled)
@@ -102,7 +101,10 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
     communications_count = np.count_nonzero(communications_matrix)
 
     # print(f"total {total_assigned} comms {communications_count}(+1= {communications_count+1}) = {total_assigned/(communications_count+1)}")
-    return total_assigned/(communications_count+1)/total_comms
+    reward = total_comms/(communications_count+1)
+    reward = reward - unassigned
+
+    return reward
 
 def get_info(action, current_assignment, node_capacity, reward, done, full_capacity, all_assigned):
     return {"Action": action,
@@ -113,18 +115,10 @@ def get_info(action, current_assignment, node_capacity, reward, done, full_capac
     "Full nodes": full_capacity,
     "All procs assigned": all_assigned}
 
-def lrsched():
+def lrsched(lr0=10, lr1=0.000001, decay_rate=2.0):
     def reallr(progress):
-        lr = 0.0002
-        if progress < 0.85:
-            lr = 0.0001
-        if progress < 0.66:
-            lr = 0.00005
-        if progress < 0.33:
-            lr = 0.000005
+        norm_progress = 1.0 - min(max(progress, 0.0), 1.0)
+        # See https://machinelearningmastery.com/using-learning-rate-schedules-deep-learning-models-python-keras/
+        lr = (lr0 - lr1) * np.exp(-decay_rate * norm_progress) + lr1
         return lr
     return reallr
-
-
-# G = nx.Graph()
-# G.add_nodes_from
