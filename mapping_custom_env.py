@@ -40,16 +40,22 @@ class CustomRLEnvironment(gym.Env):
 
         process_id, node_id = action // self.M, action % self.M
 
+        #print(f"{process_id} to node {node_id}")
+        # print(action in self.valid_action_mask())
+
         # Node can host at least one process
-        if self.node_capacity[node_id] > 0:
-            current_proc = self.current_assignment[process_id]
-            # Current process is already assigned
-            if current_proc != self.NOT_ASSIGNED:
-                # Release process from node
-                self.node_capacity[current_proc] += 1
-            # Reassign to new node
-            self.current_assignment[process_id] = node_id
-            self.node_capacity[node_id] -= 1
+        # if self.node_capacity[node_id] > 0:
+        #     current_proc = self.current_assignment[process_id]
+        #     # Current process is already assigned
+        #     if current_proc != self.NOT_ASSIGNED:
+        #         # Release process from node
+        #         self.node_capacity[current_proc] += 1
+        #     # Reassign to new node
+        #     self.current_assignment[process_id] = node_id
+        #     self.node_capacity[node_id] -= 1
+
+        self.current_assignment[process_id] = node_id
+        self.node_capacity[node_id] -= 1
 
         reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms)
         # reward *= 100
@@ -127,7 +133,7 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
 
     # print(f"total {total_assigned} comms {communications_count}(+1= {communications_count+1}) = {total_assigned/(communications_count+1)}")
     reward = total_comms / (communications_count + 1)
-    reward = reward + total_assigned
+    #reward = reward + total_assigned
 
     return reward
 

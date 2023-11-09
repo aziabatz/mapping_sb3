@@ -63,6 +63,8 @@ trained = model.learn(total_timesteps=500000, log_interval=1)
 
 trained.save("last.model")
 
+#trained = MaskablePPO.load("last.model")
+
 terminated = False
 truncated = False
 
