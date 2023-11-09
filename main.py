@@ -4,10 +4,11 @@ import gymnasium as gym
 
 
 from stable_baselines3 import DQN, PPO, A2C
-from sb3_contrib import RecurrentPPO
+from sb3_contrib import RecurrentPPO, MaskablePPO
 from stable_baselines3.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
+from sb3_contrib.common.wrappers import ActionMasker
 
-from mapping_custom_env import CustomRLEnvironment, lrsched
+from mapping_custom_env import CustomRLEnvironment, lrsched, mask
 
 # Load the JSON data from the file
 with open('./binomial_16_8.json', 'r') as file:
@@ -48,19 +49,17 @@ for edge, msg_volume in zip(edges, volume):
 # Create the Gym environment with the adjacency matrix and node capacities
 env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs)
 
+env = ActionMasker(env, action_mask_fn=mask)
 
-model = PPO(policy="MlpPolicy",
-            env=env,
-            #learning_rate=0.00001,
-            #learning_rate=lrsched(decay_rate=5.0),
-            #policy_kwargs=dict(optimizer_class=RMSpropTFLike),
-            #policy_kwargs=dict(net_arch=[32,32]),
-            #learning_starts=15000,
-            tensorboard_log="./tensorboard_16_8/",
-            verbose=1,
-            #seed=seed,
-            device='cpu')
-trained = model.learn(total_timesteps=2000000, log_interval=1)
+model = MaskablePPO(
+    policy="MlpPolicy",
+    env=env,
+    tensorboard_log="./mask_ppo/",
+    verbose=1,
+    device="cpu"
+)
+
+trained = model.learn(total_timesteps=500000, log_interval=1)
 
 trained.save("last.model")
 
