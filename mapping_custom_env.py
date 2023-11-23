@@ -160,6 +160,7 @@ class CustomRLEnvironment(gym.Env):
         #plt.draw()
         file_path = os.path.join(self.renders_dir, f"plt_{self.n_episode}_{self.n_render}")
         plt.savefig(file_path)
+        plt.savefig(os.path.join(self.renders_dir, "plt_last"))
 
         self.n_render += 1
 
