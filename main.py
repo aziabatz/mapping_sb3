@@ -1,4 +1,5 @@
 import json
+import time
 import numpy as np
 import gymnasium as gym
 
@@ -7,6 +8,8 @@ from stable_baselines3 import DQN, PPO, A2C
 from sb3_contrib import RecurrentPPO, MaskablePPO
 from stable_baselines3.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
 from sb3_contrib.common.wrappers import ActionMasker
+from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
+
 
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask
 
@@ -48,38 +51,46 @@ for edge, msg_volume in zip(edges, volume):
 
 # Create the Gym environment with the adjacency matrix and node capacities
 env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs)
-
+unwrapped = env
 env = ActionMasker(env, action_mask_fn=mask)
 
-model = MaskablePPO(
-    policy="MlpPolicy",
-    env=env,
-    tensorboard_log="./mask_ppo/",
-    verbose=1,
-    device="cpu"
-)
+# params = {"P": P, "M": M}
 
-trained = model.learn(total_timesteps=500000, log_interval=1)
+# model = MaskablePPO(
+#     policy=MaskableActorCriticPolicy,
+#     env=env,
+#     #learning_rate=lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.2),
+#     tensorboard_log="./mask_ppo_new/",
+#     verbose=1,
+#     device="cpu"
+# )
 
-trained.save("last.model")
+# trained = model.learn(total_timesteps=1500000, log_interval=1)
 
-#trained = MaskablePPO.load("last.model")
+# trained.save("last.model.maskablepolicy")
+
+trained = MaskablePPO.load("last.model.maskablepolicy")
 
 terminated = False
 truncated = False
 
 obs, info = env.reset()
-print(obs.shape)
-while not (terminated or truncated):
-    action, _ = trained.predict(observation=obs, deterministic=False)
-    obs, reward, terminated, truncated, info = env.step(action)
-    print("Predict observation:", obs)
+while not terminated:
+    obs, info = env.reset()
+    truncated = False
+    while not (terminated or truncated):
+        action, _ = trained.predict(observation=obs, deterministic=True, action_masks=env.action_masks())
+        obs, reward, terminated, truncated, info = env.step(action)
+        print("Predict observation:", obs)
+        unwrapped.render(reward, "human")
 
 placement = {}
 for proc, node in enumerate(obs, start=0):
     if node not in placement:
         placement[node] = []
     placement[node].append(proc)
+
+env.close()
 
 for node, processes in placement.items():
     print(f'Processes in node {node}: {processes}')
