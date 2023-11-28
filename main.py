@@ -1,5 +1,6 @@
-import json
 import time
+import json
+import argparse
 import numpy as np
 import gymnasium as gym
 
@@ -9,12 +10,23 @@ from sb3_contrib import RecurrentPPO, MaskablePPO
 from stable_baselines3.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
 from sb3_contrib.common.wrappers import ActionMasker
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
-
-
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask
 
+### END IMPORTS ###
+
+parser = argparse.ArgumentParser(
+    prog = "main.py"
+)
+parser.add_argument(
+    "graph_config"
+)
+args = parser.parse_args()
+args = vars(args)
+config_file = args["graph_config"]
+
 # Load the JSON data from the file
-with open('./binomial_16_8.json', 'r') as file:
+# with open('./NPB_MG_32_8_C.json', 'r') as file:
+with open(config_file, 'r') as file:
     data = json.load(file)
 
 # Extract the relevant information
@@ -43,10 +55,12 @@ edges = data["Graph"]["comms"]["edges"]
 volume = data["Graph"]["comms"]["volume"]
 
 
+
 for edge, msg_volume in zip(edges, volume):
     node1, node2 = edge
-    adj_matrix[node1][node2] = msg_volume
-    adj_matrix[node2][node1] = msg_volume  # Since it's an undirected graph
+    cost = msg_volume * n_msgs[node1] 
+    adj_matrix[node1][node2] = cost
+    adj_matrix[node2][node1] = cost # Since it's an undirected graph
 
 
 # Create the Gym environment with the adjacency matrix and node capacities
@@ -56,20 +70,20 @@ env = ActionMasker(env, action_mask_fn=mask)
 
 # params = {"P": P, "M": M}
 
-# model = MaskablePPO(
-#     policy=MaskableActorCriticPolicy,
-#     env=env,
-#     #learning_rate=lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.2),
-#     tensorboard_log="./mask_ppo_new/",
-#     verbose=1,
-#     device="cpu"
-# )
+model = MaskablePPO(
+    policy=MaskableActorCriticPolicy,
+    env=env,
+    learning_rate=lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.3),
+    tensorboard_log="./mask_ppo_new/",
+    verbose=1,
+    device="cpu"
+)
 
-# trained = model.learn(total_timesteps=1500000, log_interval=1)
+trained = model.learn(total_timesteps=500000, log_interval=5)
 
-# trained.save("last.model.maskablepolicy")
+trained.save("last.model.maskablepolicy")
 
-trained = MaskablePPO.load("last.model.maskablepolicy")
+# trained = MaskablePPO.load("last.model.maskablepolicy")
 
 terminated = False
 truncated = False

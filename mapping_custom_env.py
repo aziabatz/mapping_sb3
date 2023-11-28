@@ -28,7 +28,7 @@ class CustomRLEnvironment(gym.Env):
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
         self.action_space = Discrete(self.M)
         self.observation_space = MultiDiscrete([self.M + 2] * self.P)
-        self.total_comms = len(self.adj_matrix)
+        self.total_comms = np.sum(adj_matrix) #len(self.adj_matrix)
         self.current_process = 0
 
         self.n_episode = 0
@@ -79,7 +79,7 @@ class CustomRLEnvironment(gym.Env):
         if done:
             print(f"reward: {reward} obs: {self.current_assignment}")
             self.n_episode +=1
-            if(self.n_episode % 1000 == 0):
+            if(self.n_episode % 500 == 0):
                 self.render(reward)
 
         info = {"Action": action,
@@ -104,17 +104,6 @@ class CustomRLEnvironment(gym.Env):
         for node in range(M):
             if node_capacity[node] > 0:
                 valid_actions[node] = True
-
-
-        # for process_index in range(len(current_assignment)):
-        #     # Process is not assigned yet
-        #     if current_assignment[process_index] == M + 1:
-        #         for node_index in range(M):
-        #             # Node still can place at least one more process
-        #             if node_capacity[node_index] > 0:  # Nodo tiene capacidad
-        #                 # Set valid action as true in the array
-        #                 action = process_index * M + node_index
-        #                 valid_actions[action] = True
 
         return np.array(valid_actions)
 
@@ -178,23 +167,23 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
     total_assigned = np.count_nonzero(positions_nulled)
     unassigned = len(positions_nulled) - total_assigned
 
-    # Create a mask for positions where processes are different
     mask_0 = np.logical_and(positions_nulled[:, None], positions_nulled)
     mask_1 = positions_nulled[:, None] != positions_nulled
 
     mask = mask_0 & mask_1
 
-    # Use the mask to filter the adjacency_matrix
     communications_matrix = adjacency_matrix * mask
+    
+    volume_count = np.sum(communications_matrix)
 
-    # Count the number of non-zero elements (corresponding to communications) in the communications_matrix
-    communications_count = np.count_nonzero(communications_matrix)
+    reward = total_comms/(volume_count+1)
 
-    # print(f"total {total_assigned} comms {communications_count}(+1= {communications_count+1}) = {total_assigned/(communications_count+1)}")
-    reward = total_comms / (communications_count + 1)
-    #reward = reward + total_assigned
+    reward = reward * (total_assigned/len(positions_nulled))
 
-    return reward
+    if total_assigned < len(positions_nulled):
+        return 0
+    else:
+        return reward
 
 def lrsched(lr0=10, lr1=0.000001, decay_rate=2.0):
     def reallr(progress):
