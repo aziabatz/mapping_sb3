@@ -13,7 +13,7 @@ NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
 
-    def __init__(self, P, M, node_capacity, adj_matrix, n_msgs, seed=None):
+    def __init__(self, P, M, node_capacity, adj_matrix, n_msgs, render_freq=1000, seed=None):
         super(CustomRLEnvironment, self).__init__()
         self.seed = seed
         self.P = P
@@ -22,6 +22,7 @@ class CustomRLEnvironment(gym.Env):
         self.node_capacity = self.node_capacity_init = node_capacity
         self.adj_matrix = adj_matrix
         self.n_msgs = n_msgs
+        self.RENDER_FREQ = render_freq
 
         # Initialize all processes unassigned
         self.NOT_ASSIGNED = self.M + 1
@@ -30,6 +31,7 @@ class CustomRLEnvironment(gym.Env):
         self.observation_space = MultiDiscrete([self.M + 2] * self.P)
         self.total_comms = np.sum(adj_matrix) #len(self.adj_matrix)
         self.current_process = 0
+        self.last_reward = 0
 
         self.n_episode = 0
         self.n_render = 0
@@ -45,6 +47,7 @@ class CustomRLEnvironment(gym.Env):
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
         self.aux = 0
         self.current_process = 0
+        #self.last_reward = 0
         return self.current_assignment, {}
 
     def step(self, action):
@@ -78,9 +81,9 @@ class CustomRLEnvironment(gym.Env):
 
         if done:
             print(f"reward: {reward} obs: {self.current_assignment}")
-            self.n_episode +=1
-            if(self.n_episode % 500 == 0):
+            if(self.n_episode % self.RENDER_FREQ == 0):
                 self.render(reward)
+            self.n_episode +=1
 
         info = {"Action": action,
                 "Current Assignment": self.current_assignment,
@@ -95,7 +98,6 @@ class CustomRLEnvironment(gym.Env):
 
     def valid_action_mask(self):
 
-        current_assignment = self.current_assignment.copy()
         node_capacity = self.node_capacity.copy()
         M = self.M
 
@@ -108,7 +110,7 @@ class CustomRLEnvironment(gym.Env):
         return np.array(valid_actions)
 
     def render(self, reward, mode="human"):
-        if mode is not "human":
+        if mode != "human":
             raise NotImplementedError(f"Render mode {mode} not implemented")
 
         G = nx.Graph()
@@ -134,10 +136,11 @@ class CustomRLEnvironment(gym.Env):
                 color_map.append('grey') 
 
         
-        plt.figure(figsize=(10, 10))
+        plt.clf()
+        plt.figure(figsize=(20, 20))
         if self.ingraph_node_pos is None:
             # self.ingraph_node_pos = nx.spring_layout(G, k=1.5)
-            self.ingraph_node_pos = nx.planar_layout(G)
+            self.ingraph_node_pos = nx.spring_layout(G, k=4)
         nx.draw(G, self.ingraph_node_pos, with_labels=True, node_color=color_map, node_size=200, edge_color="black")
 
         # Etiquetas de peso en las aristas
@@ -150,6 +153,7 @@ class CustomRLEnvironment(gym.Env):
         file_path = os.path.join(self.renders_dir, f"plt_{self.n_episode}_{self.n_render}")
         plt.savefig(file_path)
         plt.savefig(os.path.join(self.renders_dir, "plt_last"))
+        
 
         self.n_render += 1
 
@@ -176,14 +180,18 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
     
     volume_count = np.sum(communications_matrix)
 
-    reward = total_comms/(volume_count+1)
 
-    reward = reward * (total_assigned/len(positions_nulled))
+    #reward = reward * (total_assigned/len(positions_nulled))
+    
 
     if total_assigned < len(positions_nulled):
-        return 0
+        reward =  0
     else:
-        return reward
+        reward = total_comms/(volume_count+1)
+        
+    #reward = reward + total_assigned
+    
+    return reward
 
 def lrsched(lr0=10, lr1=0.000001, decay_rate=2.0):
     def reallr(progress):

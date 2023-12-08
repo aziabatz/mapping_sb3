@@ -1,112 +1,173 @@
-import time
 import json
 import argparse
 import numpy as np
-import gymnasium as gym
+import signal
+import sys
 
-
-from stable_baselines3 import DQN, PPO, A2C
-from sb3_contrib import RecurrentPPO, MaskablePPO
-from stable_baselines3.common.sb2_compat.rmsprop_tf_like import RMSpropTFLike
+from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
-from mapping_custom_env import CustomRLEnvironment, lrsched, mask
+from mapping_custom_env import CustomRLEnvironment, lrsched, mask, count_communications
 
 ### END IMPORTS ###
 
-parser = argparse.ArgumentParser(
-    prog = "main.py"
-)
-parser.add_argument(
-    "graph_config"
-)
-args = parser.parse_args()
-args = vars(args)
-config_file = args["graph_config"]
+signal_count = 0
+model = None
 
-# Load the JSON data from the file
-# with open('./NPB_MG_32_8_C.json', 'r') as file:
-with open(config_file, 'r') as file:
-    data = json.load(file)
+def signal_handler(sig, frame):
+    global signal_count
+    global model
+    signal_count += 1
+    if signal_count == 1:
+        if model is None:
+            print("Agent has not started learning yet. Exiting...")
+            sys.exit(0)
+        name = input("Interrupt agent training. Introduce name for file:")
+        model.save(name)
+    else:
+        print("ABORTED")
+    sys.exit(0)
 
-# Extract the relevant information
-P = data["Graph"]["P"]
-M = data["Graph"]["M"]
-node_names = data["Graph"]["node_names"]
-edges = data["Graph"]["comms"]["edges"]
-volume = data["Graph"]["comms"]["volume"]
-n_msgs = data["Graph"]["comms"]["n_msgs"]
+def load_config(config_file):
+    with open(config_file, 'r') as file:
+        data = json.load(file)
+        return data
+    
+def init_matrix(P, edges, volume, n_msgs, reward_type="volume"):
+    adj_matrix = np.zeros((P, P))
+    factor = volume if reward_type == "volume" else n_msgs
+    for edge, factor in zip(edges, volume):
+        node1, node2 = edge
+        cost = factor
+        adj_matrix[node1][node2] = cost
 
-# Extract node capacities from the JSON data
-node_capacity = data["Graph"]["capacity"]
+    return adj_matrix
 
-np_node_capacity = np.array(node_capacity)
+def get_render_config(data):
+    config = data["Config"]
+    reward_type = config["reward_type"]
+    verbosity = config["verbosity"]
+    verbose_freq = config["verbosity_interval"]
+    return reward_type, verbosity, verbose_freq
 
-# Extract the number of nodes (M)
-M = data["Graph"]["M"]
+def init_env(data):
+    P = data["Graph"]["P"]
+    M = data["Graph"]["M"]
+    reward_type, _, render_freq = get_render_config(data)
+    edges = data["Graph"]["comms"]["edges"]
+    volume = data["Graph"]["comms"]["volume"]
+    n_msgs = data["Graph"]["comms"]["n_msgs"]
 
-# Initialize the adjacency matrix with zeros
-adj_matrix = np.zeros((P, P))
+    adj_matrix = init_matrix(P, edges, volume, n_msgs, reward_type)
 
-seed = 42
+    
+    node_capacity = data["Graph"]["capacity"]
+    np_node_capacity = np.array(node_capacity)    
 
-# Populate the adjacency matrix with edge weights (volume)
-edges = data["Graph"]["comms"]["edges"]
-volume = data["Graph"]["comms"]["volume"]
+    env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
+
+    unwrapped = env
+    env = ActionMasker(env, action_mask_fn=mask)
+    return env, unwrapped
+
+def get_total_steps(data):
+    P = data["Graph"]["P"]
+    episodes = data["Hyperparameters"]["n_episodes"]
+    return episodes * P
+
+signal.signal(signal.SIGINT, signal_handler)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog = "main.py"
+    )
+    parser.add_argument(
+        "graph_config"
+    )
+    args = parser.parse_args()
+    args = vars(args)
+    config_file = args["graph_config"]
+
+    data = load_config(config_file)
+    env, unwrapped = init_env(data)
+    
+    P = data["Graph"]["P"]
+    total_steps = get_total_steps(data=data)
+
+    model = MaskablePPO(
+        #policy=MaskableActorCriticPolicy,
+        policy="MlpPolicy",
+        env=env,
+        learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
+        tensorboard_log="./testall/binomial",
+        verbose=1,
+        device="cpu",
+        #vf_coef=0.3,
+        #normalize_advantage=False,
+        ent_coef= 1,
+        gamma=0.99,
+        n_steps=4096,
+        n_epochs=20,
+        gae_lambda=0.97,
+        batch_size=128,
+        clip_range=lrsched(lr0=2, lr1=0.05, decay_rate=2.5)
+    )
+
+    # model = MaskablePPO.load(f"last.{config_file}.model")
+    
+    # model.set_env(env, force_reset=True)
+    # model.learning_rate = lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.3)
+    # model.ent_coef = 0.01 # coeficiente de entropia (mas alto mas exploracion)
+    # #model.gamma = 0.98 # Factor de descuento de recompensas futuras
 
 
+    trained = model.learn(total_timesteps=total_steps, log_interval=1)
 
-for edge, msg_volume in zip(edges, volume):
-    node1, node2 = edge
-    cost = msg_volume * n_msgs[node1] 
-    adj_matrix[node1][node2] = cost
-    adj_matrix[node2][node1] = cost # Since it's an undirected graph
+    trained.save(f"./models/binomial/last.{config_file}.model")
 
+    del trained
 
-# Create the Gym environment with the adjacency matrix and node capacities
-env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs)
-unwrapped = env
-env = ActionMasker(env, action_mask_fn=mask)
+    trained = MaskablePPO.load(f"./models/binomial/last.{config_file}.model")
+    
+    ### PREDICTION ###
 
-# params = {"P": P, "M": M}
-
-model = MaskablePPO(
-    policy=MaskableActorCriticPolicy,
-    env=env,
-    learning_rate=lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.3),
-    tensorboard_log="./mask_ppo_new/",
-    verbose=1,
-    device="cpu"
-)
-
-trained = model.learn(total_timesteps=500000, log_interval=5)
-
-trained.save("last.model.maskablepolicy")
-
-# trained = MaskablePPO.load("last.model.maskablepolicy")
-
-terminated = False
-truncated = False
-
-obs, info = env.reset()
-while not terminated:
-    obs, info = env.reset()
+    terminated = False
     truncated = False
-    while not (terminated or truncated):
-        action, _ = trained.predict(observation=obs, deterministic=True, action_masks=env.action_masks())
-        obs, reward, terminated, truncated, info = env.step(action)
-        print("Predict observation:", obs)
-        unwrapped.render(reward, "human")
 
-placement = {}
-for proc, node in enumerate(obs, start=0):
-    if node not in placement:
-        placement[node] = []
-    placement[node].append(proc)
+    obs, info = env.reset()
+    while not terminated:
+        obs, info = env.reset()
+        truncated = False
+        while not (terminated or truncated):
+            action, _ = trained.predict(observation=obs, deterministic=True, action_masks=env.action_masks())
+            obs, reward, terminated, truncated, info = env.step(action)
+            print("Predict observation:", obs)
 
-env.close()
+    ### PREDICTION END ###
+    
+    ### MODEL EVAL ###
 
-for node, processes in placement.items():
-    print(f'Processes in node {node}: {processes}')
+    placement = {}
+    for proc, node in enumerate(obs, start=0):
+        if node not in placement:
+            placement[node] = []
+        placement[node].append(proc)
 
-print("Final assignm", obs)
+    unwrapped.render(reward, "human")
+    env.close()
+
+    for node, processes in placement.items():
+        print(f'Processes in node {node}: {processes}')
+
+    print("Final assignm", obs)
+
+    optimal = data["Benchmark"]["optimal_mapping"]
+    optimal = np.array(optimal)
+    optimal_reward = count_communications(
+        positions=optimal,
+        adjacency_matrix=unwrapped.adj_matrix,
+        not_assigned=unwrapped.NOT_ASSIGNED,
+        total_comms=unwrapped.total_comms
+    )
+
+    print(f"Optimal placement was {optimal} with reward {optimal_reward}")

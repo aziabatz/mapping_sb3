@@ -18,7 +18,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "binomial_16_8_unbalanced.json"
+                "dataset/binomial_32_4.json"
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
