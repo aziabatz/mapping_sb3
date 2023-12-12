@@ -99,19 +99,26 @@ if __name__ == "__main__":
         policy="MlpPolicy",
         env=env,
         learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
-        tensorboard_log="./testall/binomial",
+        tensorboard_log="./newobs",
         verbose=1,
         device="cpu",
         #vf_coef=0.3,
         #normalize_advantage=False,
-        ent_coef= 1,
+        ent_coef= 0.85,
         gamma=0.99,
-        n_steps=4096,
-        n_epochs=20,
+        n_steps=8192,
+        n_epochs=40,
         gae_lambda=0.97,
-        batch_size=128,
-        clip_range=lrsched(lr0=2, lr1=0.05, decay_rate=2.5)
+        batch_size=256,
+        clip_range=lrsched(lr0=3, lr1=0.05, decay_rate=2.5)
     )
+    
+    # model = MaskablePPO(
+    #     policy="MlpPolicy",
+    #     env=env,
+    #     tensorboard_log="./newobs",
+    #     verbose=1
+    # )
 
     # model = MaskablePPO.load(f"last.{config_file}.model")
     
@@ -123,11 +130,11 @@ if __name__ == "__main__":
 
     trained = model.learn(total_timesteps=total_steps, log_interval=1)
 
-    trained.save(f"./models/binomial/last.{config_file}.model")
+    trained.save(f"./models/newobs/last.{config_file}.model")
 
     del trained
 
-    trained = MaskablePPO.load(f"./models/binomial/last.{config_file}.model")
+    trained = MaskablePPO.load(f"./models/newobs/last.{config_file}.model")
     
     ### PREDICTION ###
 
@@ -148,7 +155,7 @@ if __name__ == "__main__":
     ### MODEL EVAL ###
 
     placement = {}
-    for proc, node in enumerate(obs, start=0):
+    for proc, node in enumerate(unwrapped.current_assignment, start=0):
         if node not in placement:
             placement[node] = []
         placement[node].append(proc)

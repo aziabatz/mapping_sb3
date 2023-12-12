@@ -5,7 +5,7 @@ import gymnasium as gym
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
-from gymnasium.spaces import Discrete, MultiDiscrete
+from gymnasium.spaces import Discrete, MultiDiscrete, Dict, Box
 
 DEBUG = False
 NEGATIVE_INF = -float('inf')
@@ -13,7 +13,7 @@ NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
 
-    def __init__(self, P, M, node_capacity, adj_matrix, n_msgs, render_freq=1000, seed=None):
+    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, render_freq=1000, seed=None):
         super(CustomRLEnvironment, self).__init__()
         self.seed = seed
         self.P = P
@@ -24,11 +24,15 @@ class CustomRLEnvironment(gym.Env):
         self.n_msgs = n_msgs
         self.RENDER_FREQ = render_freq
 
+        obs_len = np.prod(adj_matrix.shape) + self.P
+        
         # Initialize all processes unassigned
         self.NOT_ASSIGNED = self.M + 1
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
         self.action_space = Discrete(self.M)
-        self.observation_space = MultiDiscrete([self.M + 2] * self.P)
+        self.observation_space = Box(low=0, high=np.inf, shape=(obs_len,), dtype=np.float32)
+
+        
         self.total_comms = np.sum(adj_matrix) #len(self.adj_matrix)
         self.current_process = 0
         self.last_reward = 0
@@ -40,6 +44,18 @@ class CustomRLEnvironment(gym.Env):
         self.renders_dir = os.path.join("./renders", timestamp)
         if not os.path.exists(self.renders_dir):
             os.makedirs(self.renders_dir)
+            
+    @property
+    def current_observation(self):
+        # current = {
+        #     'current_assignment': self.current_assignment,
+        #     'communication_matrix': self.adj_matrix
+        # }
+        current = np.concatenate(
+            [self.current_assignment, self.adj_matrix.flatten()]
+        )
+        return current
+        
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
@@ -48,7 +64,9 @@ class CustomRLEnvironment(gym.Env):
         self.aux = 0
         self.current_process = 0
         #self.last_reward = 0
-        return self.current_assignment, {}
+        #return self.current_assignment, {}
+        return self.current_observation, {}
+        
 
     def step(self, action):
 
@@ -86,7 +104,7 @@ class CustomRLEnvironment(gym.Env):
             self.n_episode +=1
 
         info = {"Action": action,
-                "Current Assignment": self.current_assignment,
+                "Current Assignment": self.current_observation,
                 "Node Capacities": self.node_capacity,
                 "Reward": reward,
                 "Done": done,
@@ -94,7 +112,8 @@ class CustomRLEnvironment(gym.Env):
                 "All procs assigned": all_assigned}
 
 
-        return self.current_assignment, reward, done, truncated, info
+        #return self.current_assignment, reward, done, truncated, info
+        return self.current_observation, reward, done, truncated, info
 
     def valid_action_mask(self):
 
