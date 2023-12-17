@@ -13,7 +13,7 @@ NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
 
-    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, render_freq=1000, seed=None):
+    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, optimal, render_freq=1000, seed=None):
         super(CustomRLEnvironment, self).__init__()
         self.seed = seed
         self.P = P
@@ -47,6 +47,15 @@ class CustomRLEnvironment(gym.Env):
         self.total_comms = np.sum(adj_matrix)
         self.current_process = 0
         self.last_reward = 0
+        
+        self.optimal_reward = count_communications(
+            positions=optimal,
+            adjacency_matrix=self.adj_matrix,
+            not_assigned=self.NOT_ASSIGNED,
+            total_comms=self.total_comms,
+            P=self.P,
+            optimal=None
+        )
 
         self.n_episode = 0
         self.n_render = 0
@@ -104,7 +113,7 @@ class CustomRLEnvironment(gym.Env):
         
         self.current_process += 1
 
-        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms, self.P)
+        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms, self.P, self.optimal_reward)
 
         # Check if all processes have been assigned and done with an episode
         full_capacity = np.all(self.node_capacity == 0)
@@ -114,7 +123,7 @@ class CustomRLEnvironment(gym.Env):
         done = full_capacity or all_assigned
 
         if done:
-            # print(f"reward: {reward} obs: {self.current_assignment}")
+            print(f"reward: {reward} obs: {self.current_assignment}")
             # if(self.n_episode % self.RENDER_FREQ == 0):
             #     self.render(reward)
             self.n_episode +=1
@@ -198,7 +207,7 @@ class CustomRLEnvironment(gym.Env):
 def mask(env: gym.Env) -> np.ndarray:
     return env.valid_action_mask()
 
-def count_communications(positions, adjacency_matrix, not_assigned, total_comms, P):
+def count_communications(positions, adjacency_matrix, not_assigned, total_comms, P, optimal=None):
     positions_nulled = positions[:P].copy()
     positions_nulled[positions_nulled == not_assigned] = -1
     positions_nulled += 1
@@ -225,6 +234,8 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms,
         reward =  0
     else:
         reward = total_comms/(volume_count+1)
+        if optimal is not None:
+            reward = reward/optimal*100
         
     #reward = reward + total_assigned
     

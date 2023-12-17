@@ -4,7 +4,7 @@ import numpy as np
 import signal
 import sys
 
-from sb3_contrib import MaskablePPO
+from sb3_contrib import MaskablePPO, RecurrentPPO
 from sb3_contrib.common.wrappers import ActionMasker
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask, count_communications
@@ -64,11 +64,13 @@ def init_env(data):
 
     adj_matrix = init_matrix(P, edges, volume, n_msgs, reward_type)
 
+    optimal = data["Benchmark"]["optimal_mapping"]
+    optimal = np.array(optimal)
     
     node_capacity = data["Graph"]["capacity"]
     np_node_capacity = np.array(node_capacity)    
 
-    env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
+    env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, optimal, render_freq)
 
     unwrapped = env
     env = ActionMasker(env, action_mask_fn=mask)
@@ -133,7 +135,7 @@ if __name__ == "__main__":
             model.set_env(env=env)
             model.learning_rate = lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5)
         
-        model.learn(total_timesteps=total_steps, log_interval=1)
+        model.learn(total_timesteps=total_steps, log_interval=1, reset_num_timesteps=False, progress_bar=True)
         model.save("whatever.model")
     
     # ### PREDICTION ###
