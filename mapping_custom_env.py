@@ -4,7 +4,6 @@ import numpy as np
 import gymnasium as gym
 import networkx as nx
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from gymnasium.spaces import Discrete, MultiDiscrete, Dict, Box
 
 DEBUG = False
@@ -13,49 +12,51 @@ NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
 
-    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, optimal, render_freq=1000, seed=None):
+    def __init__(self, render_freq=1000, seed=None):
         super(CustomRLEnvironment, self).__init__()
         self.seed = seed
-        self.P = P
-        self.M = M
         
         self.MAX_PROCS = 256
         self.MAX_NODES = 32
         self.MAX_MATRIX_SHAPE = (self.MAX_PROCS, self.MAX_PROCS)
         
         # Save init array for environment reset
-        self.node_capacity_init = node_capacity
+        #self.node_capacity_init = node_capacity
         
         # ADJ MATRIX OF ENV
-        self.adj_matrix = np.pad(adj_matrix,
-                                pad_width=[(0, self.MAX_PROCS - adj_matrix.shape[0]), (0,self.MAX_PROCS-adj_matrix.shape[1])],
-                                mode='constant',
-                                constant_values=-1)
+        # self.adj_matrix = np.pad(adj_matrix,
+        #                         pad_width=[(0, self.MAX_PROCS - adj_matrix.shape[0]), (0,self.MAX_PROCS-adj_matrix.shape[1])],
+        #                         mode='constant',
+        #                         constant_values=-1)
         
-        self.n_msgs = n_msgs
         self.RENDER_FREQ = render_freq
 
         obs_len = np.prod(self.MAX_MATRIX_SHAPE) + self.MAX_PROCS
         
         # Initialize all processes unassigned
         self.NOT_ASSIGNED = self.MAX_NODES + 1
-        #
         self.action_space = Discrete(self.MAX_NODES)
-        self.observation_space = Box(low=1, high=np.inf, shape=(obs_len,), dtype=np.float32)
+        self.observation_space = Dict(
+                {
+                    "processes": Discrete(self.MAX_PROCS),
+                    "nodes": Discrete(self.MAX_NODES),
+                    "adjacency_matrix": Box(low=0, high=np.inf, dtype=np.float32, shape=(self.MAX_PROCS, self.MAX_PROCS)),
+                    
+                    "node_capacity": Box(low=0, high=(self.MAX_PROCS//self.MAX_NODES), dtype=np.int32, shape=(self.MAX_NODES,)),
+                    "current_assignment": Box(low=0, high=self.MAX_NODES, dtype=np.int32, shape=(self.MAX_PROCS,)),
+                    
+                    "best": Box(low=0, high=np.inf)
+                }
+        )
+        
+        Box(low=1, high=np.inf, shape=(obs_len,), dtype=np.float32)
+
+
 
         # Don't panic, adj matrix is not the amplified matrix after concatenation
-        self.total_comms = np.sum(adj_matrix)
         self.current_process = 0
         self.last_reward = 0
-        
-        self.optimal_reward = count_communications(
-            positions=optimal,
-            adjacency_matrix=self.adj_matrix,
-            not_assigned=self.NOT_ASSIGNED,
-            total_comms=self.total_comms,
-            P=self.P,
-            optimal=None
-        )
+        self.best = 0
 
         self.n_episode = 0
         self.n_render = 0
@@ -65,30 +66,44 @@ class CustomRLEnvironment(gym.Env):
         if not os.path.exists(self.renders_dir):
             os.makedirs(self.renders_dir)
             
-    @property
-    def current_observation(self):
-
-        current = np.concatenate(
-            [self.current_assignment, self.adj_matrix.flatten()]
-        )
-        return current
-        
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
         
+        self.P = np.random.randint(low=0, high=self.MAX_PROCS)
+        self.M = np.random.randint(low=4, high=self.MAX_NODES)
+
+        self.adj_matrix = np.random.random_integers(0, high=999999, size=(self.P, self.P))
+        np.fill_diagonal(self.adj_matrix, 0)
+        self.adj_matrix = np.pad(array=self.adj_matrix,
+                                 pad_width=[(0,self.MAX_PROCS-self.P), (0,self.MAX_PROCS-self.P)],
+                                 mode='constant', constant_values=0)
+
+        self.total_comms = np.sum(self.adj_matrix)
+
+
         # Reset node capacities
         # Node cap array is node cap array from config with remaining of nodes (until max) capacities to 0
-        self.node_capacity = np.pad(self.node_capacity_init,
-                                    (0, self.MAX_NODES - len(self.node_capacity_init)),
-                                    mode="constant") # 0 constant by default
-        
+        self.node_capacity = np.random.randint(2, high=16 + 1, size=self.M)
+        pad_width = (0, self.MAX_NODES - len(self.node_capacity))
+        self.node_capacity = np.pad(self.node_capacity, pad_width, mode="constant", constant_values=0) # 0 constant by default
+
         self.current_assignment = np.full(self.MAX_PROCS, self.NOT_ASSIGNED)
-        
-        self.aux = 0
         self.current_process = 0
 
         return self.current_observation, {}
+        
+    @property
+    def current_observation(self):
+        current = {
+            "processes": self.P,
+            "nodes": self.M,
+            "adjacency_matrix": self.adj_matrix,
+            "node_capacity": self.node_capacity,
+            "current_assignment": self.current_assignment,
+            "best": self.best
+        }
+        return current
         
 
     def step(self, action):
@@ -113,7 +128,10 @@ class CustomRLEnvironment(gym.Env):
         
         self.current_process += 1
 
-        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms, self.P, self.optimal_reward)
+        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms, self.P)
+
+        if reward > self.best:
+            self.best = reward
 
         # Check if all processes have been assigned and done with an episode
         full_capacity = np.all(self.node_capacity == 0)
@@ -207,7 +225,7 @@ class CustomRLEnvironment(gym.Env):
 def mask(env: gym.Env) -> np.ndarray:
     return env.valid_action_mask()
 
-def count_communications(positions, adjacency_matrix, not_assigned, total_comms, P, optimal=None):
+def count_communications(positions, adjacency_matrix, not_assigned, total_comms, P):
     positions_nulled = positions[:P].copy()
     positions_nulled[positions_nulled == not_assigned] = -1
     positions_nulled += 1
@@ -234,8 +252,6 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms,
         reward =  0
     else:
         reward = total_comms/(volume_count+1)
-        if optimal is not None:
-            reward = reward/optimal*100
         
     #reward = reward + total_assigned
     

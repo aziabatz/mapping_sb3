@@ -84,59 +84,59 @@ def get_total_steps(data):
 signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        prog = "main.py"
-    )
-    parser.add_argument(
-        "configs"
-    )
-    args = parser.parse_args()
-    args = vars(args)
-    all_config = args["configs"]
+    # parser = argparse.ArgumentParser(
+    #     prog = "main.py"
+    # )
+    # parser.add_argument(
+    #     "configs"
+    # )
+    # args = parser.parse_args()
+    # args = vars(args)
+    # all_config = args["configs"]
     
-    configs_paths = read_config_paths(all_config)
+    # configs_paths = read_config_paths(all_config)
     
-    for config_path in configs_paths:
-        data = load_config(config_path)
-        env, unwrapped = init_env(data)
-    
-        P = data["Graph"]["P"]
-        total_steps = get_total_steps(data=data)
-        
-        if model is None:
-            # model = MaskablePPO(
-            #     #policy=MaskableActorCriticPolicy,
-            #     policy="MlpPolicy",
-            #     env=env,
-            #     learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
-            #     tensorboard_log="./newobs",
-            #     verbose=1,
-            #     device="cpu",
-            #     #vf_coef=0.3,
-            #     #normalize_advantage=False,
-            #     ent_coef= 0.85,
-            #     gamma=0.99,
-            #     n_steps=8192,
-            #     n_epochs=40,
-            #     gae_lambda=0.97,
-            #     batch_size=256,
-            #     clip_range=lrsched(lr0=3, lr1=0.05, decay_rate=2.5)
-            # )
-            model = MaskablePPO(
-                policy=MaskableActorCriticPolicy,
-                env = env,
-                learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
-                tensorboard_log="./newobs",
-                verbose=1
-            )
-        else:
-            # del model
-            # model = MaskablePPO.load("whatever.model")
-            model.set_env(env=env)
-            model.learning_rate = lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5)
-        
-        model.learn(total_timesteps=total_steps, log_interval=1, reset_num_timesteps=False, progress_bar=True)
-        model.save("whatever.model")
+    # for config_path in configs_paths:
+    #     data = load_config(config_path)
+    #     env, unwrapped = init_env(data)
+    #
+    #     P = data["Graph"]["P"]
+    #     total_steps = get_total_steps(data=data)
+    #
+    #     if model is None:
+    #         # model = MaskablePPO(
+    #         #     #policy=MaskableActorCriticPolicy,
+    #         #     policy="MlpPolicy",
+    #         #     env=env,
+    #         #     learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
+    #         #     tensorboard_log="./newobs",
+    #         #     verbose=1,
+    #         #     device="cpu",
+    #         #     #vf_coef=0.3,
+    #         #     #normalize_advantage=False,
+    #         #     ent_coef= 0.85,
+    #         #     gamma=0.99,
+    #         #     n_steps=8192,
+    #         #     n_epochs=40,
+    #         #     gae_lambda=0.97,
+    #         #     batch_size=256,
+    #         #     clip_range=lrsched(lr0=3, lr1=0.05, decay_rate=2.5)
+    #         # )
+    #         model = MaskablePPO(
+    #             policy=MaskableActorCriticPolicy,
+    #             env = env,
+    #             learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
+    #             tensorboard_log="./newobs",
+    #             verbose=1
+    #         )
+    #     else:
+    #         # del model
+    #         # model = MaskablePPO.load("whatever.model")
+    #         model.set_env(env=env)
+    #         model.learning_rate = lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5)
+    #
+    #     model.learn(total_timesteps=total_steps, log_interval=1, reset_num_timesteps=False, progress_bar=True)
+    #     model.save("whatever.model")
     
     # ### PREDICTION ###
 
@@ -181,3 +181,21 @@ if __name__ == "__main__":
     # )
 
     # print(f"Optimal placement was {optimal} with reward {optimal_reward}")
+
+    unwrapped = CustomRLEnvironment()
+    env = ActionMasker(env=unwrapped, action_mask_fn=mask)
+    model = MaskablePPO(
+        policy="MultiInputPolicy",
+        env=env,
+        verbose=1,
+        tensorboard_log="./random_env",
+        gamma=0.99,
+        n_steps=8192*2,
+        n_epochs=128,
+        batch_size=1024,
+        learning_rate=lrsched(lr0=0.03, lr1=0.00000001, decay_rate=5)
+    )
+
+    model.learn(total_timesteps=5000000, log_interval=5, tb_log_name="Random_ENV_PPO", use_masking=True, progress_bar=True)
+
+    model.save("./random_env.ppo_mask.model")
