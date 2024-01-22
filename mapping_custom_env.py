@@ -30,12 +30,21 @@ class CustomRLEnvironment(gym.Env):
         self.NOT_ASSIGNED = self.M + 1
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
         self.action_space = Discrete(self.M)
-        self.observation_space = Box(low=0, high=np.inf, shape=(obs_len,), dtype=np.float32)
-
+        #self.observation_space = Box(low=0, high=np.inf, shape=(obs_len,), dtype=np.float32)
+        
+        self.observation_space = Dict({
+            'communication_matrix': Box(low=0, high=np.inf, shape=(self.adj_matrix.shape), dtype=np.float32),
+            'current_assignment': MultiDiscrete([self.M+2] * P),
+            'node_capacities': MultiDiscrete(self.node_capacity_init + 2),
+            # 'total_processes': Discrete(1, start=self.P),
+            # 'total_nodes': Discrete(1, start=self.M),
+            'current_process': Discrete(self.P, start=0)
+        })
         
         self.total_comms = np.sum(adj_matrix) #len(self.adj_matrix)
         self.current_process = 0
-        self.last_reward = 0
+        self.best_reward= 0
+        self.best_found = None
 
         self.n_episode = 0
         self.n_render = 0
@@ -47,34 +56,37 @@ class CustomRLEnvironment(gym.Env):
             
     @property
     def current_observation(self):
-        # current = {
-        #     'current_assignment': self.current_assignment,
-        #     'communication_matrix': self.adj_matrix
-        # }
-        current = np.concatenate(
-            [self.current_assignment, self.adj_matrix.flatten()]
-        )
+        current = {
+            'communication_matrix': self.adj_matrix,
+            
+            'current_assignment': self.current_assignment,
+            'node_capacities': self.node_capacity,
+            
+            # 'total_processes': self.P,
+            # 'total_nodes': self.M,
+            
+            'current_process': self.current_process
+        }
+        # current = np.concatenate(
+        #     [self.current_assignment, self.adj_matrix.flatten()]
+        # )
         return current
         
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed, options=options)
-        self.node_capacity = self.node_capacity_init.copy()  # Reset node capacities
+        
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
-        self.aux = 0
+        self.node_capacity = self.node_capacity_init.copy()  # Reset node capacities
         self.current_process = 0
-        #self.last_reward = 0
-        #return self.current_assignment, {}
+        
         return self.current_observation, {}
         
 
     def step(self, action):
 
-        # process_id, node_id = action // self.M, action % self.M
         process_id = self.current_process
         node_id = action
-        #print(f"{process_id} to node {node_id}")
-        # print(action in self.valid_action_mask())
 
         proc_assigned = self.current_assignment[process_id] != self.NOT_ASSIGNED
         node_full = self.node_capacity[node_id] == 0
@@ -91,6 +103,10 @@ class CustomRLEnvironment(gym.Env):
         self.current_process += 1
 
         reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms)
+        
+        if(self.best_reward < reward):
+            self.best_found = self.current_assignment.copy()
+            self.best_reward = reward
 
         # Check if all processes have been assigned and done with an episode
         full_capacity = np.all(self.node_capacity == 0)
@@ -112,7 +128,6 @@ class CustomRLEnvironment(gym.Env):
                 "All procs assigned": all_assigned}
 
 
-        #return self.current_assignment, reward, done, truncated, info
         return self.current_observation, reward, done, truncated, info
 
     def valid_action_mask(self):
@@ -155,24 +170,26 @@ class CustomRLEnvironment(gym.Env):
                 color_map.append('grey') 
 
         
-        plt.clf()
-        plt.figure(figsize=(20, 20))
+    
+        fig = plt.figure(figsize=(20, 20))
         if self.ingraph_node_pos is None:
-            # self.ingraph_node_pos = nx.spring_layout(G, k=1.5)
-            self.ingraph_node_pos = nx.spring_layout(G, k=4)
+            self.ingraph_node_pos = nx.spring_layout(G, k=1.5)
+            #self.ingraph_node_pos = nx.planar_layout(G, scale=2)
         nx.draw(G, self.ingraph_node_pos, with_labels=True, node_color=color_map, node_size=200, edge_color="black")
 
         # Etiquetas de peso en las aristas
         edge_labels = nx.get_edge_attributes(G, 'weight')
         nx.draw_networkx_edge_labels(G, self.ingraph_node_pos, edge_labels=edge_labels)
 
-        plt.text(0.95, 0.95, f'Rwd={reward}', horizontalalignment='right', verticalalignment='top', transform=plt.gcf().transFigure)
+        fig.text(0.95, 0.95, f'Rwd={reward}', horizontalalignment='right', verticalalignment='top', transform=plt.gcf().transFigure)
 
         #plt.draw()
         file_path = os.path.join(self.renders_dir, f"plt_{self.n_episode}_{self.n_render}")
-        plt.savefig(file_path)
-        plt.savefig(os.path.join(self.renders_dir, "plt_last"))
+        fig.savefig(file_path)
+        fig.savefig(os.path.join(self.renders_dir, "plt_last"))
         
+        fig.clf()
+        self.close()
 
         self.n_render += 1
 
@@ -197,11 +214,7 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
 
     communications_matrix = adjacency_matrix * mask
     
-    volume_count = np.sum(communications_matrix)
-
-
-    #reward = reward * (total_assigned/len(positions_nulled))
-    
+    volume_count = np.sum(communications_matrix)    
 
     if total_assigned < len(positions_nulled):
         reward =  0
