@@ -3,11 +3,18 @@ import argparse
 import numpy as np
 import signal
 import sys
+import time
 
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask, count_communications
+from callbacks.entropy_callback import EntropyCallback
+from callbacks.tb_log_callback import TensorboardLogCallback
+
+from results.write_results import JsonManager
+
+from stable_baselines3.common.callbacks import CallbackList
 
 ### END IMPORTS ###
 
@@ -93,24 +100,32 @@ if __name__ == "__main__":
     
     P = data["Graph"]["P"]
     total_steps = get_total_steps(data=data)
+    
+    ent_start, ent_end = 0.25, 0.0
+    entropy_scheduler = EntropyCallback(start=ent_start, end=ent_end, steps=total_steps, verbose=2)
+    logger_callback = TensorboardLogCallback(verbose=0)
+    
+    callbacks = CallbackList([entropy_scheduler, logger_callback])
 
     model = MaskablePPO(
         #policy=MaskableActorCriticPolicy,
-        policy="MlpPolicy",
+        policy="MultiInputPolicy",
         env=env,
         learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
         tensorboard_log="./newobs",
         verbose=1,
         device="cpu",
-        #vf_coef=0.3,
-        #normalize_advantage=False,
-        ent_coef= 0.85,
-        gamma=0.99,
-        n_steps=8192,
-        n_epochs=40,
+
+        # 
+        clip_range= lrsched(lr0=0.8, lr1=0.1, decay_rate=2.5),
+        ent_coef= ent_start,
+        
+        gamma=0.989,
+        #n_steps=8192,
+        #n_epochs=40,
         gae_lambda=0.97,
-        batch_size=256,
-        clip_range=lrsched(lr0=3, lr1=0.05, decay_rate=2.5)
+        #batch_size=256
+        
     )
     
     # model = MaskablePPO(
@@ -127,9 +142,11 @@ if __name__ == "__main__":
     # model.ent_coef = 0.01 # coeficiente de entropia (mas alto mas exploracion)
     # #model.gamma = 0.98 # Factor de descuento de recompensas futuras
 
-
-    trained = model.learn(total_timesteps=total_steps, log_interval=1)
-
+    start_time = time.time()
+    trained = model.learn(total_timesteps=total_steps, log_interval=1, callback= callbacks, tb_log_name="PPO_clip_entropy_sched")
+    end_time = time.time()
+    
+    
     trained.save(f"./models/newobs/last.{config_file}.model")
 
     del trained
@@ -148,7 +165,7 @@ if __name__ == "__main__":
         while not (terminated or truncated):
             action, _ = trained.predict(observation=obs, deterministic=True, action_masks=env.action_masks())
             obs, reward, terminated, truncated, info = env.step(action)
-            print("Predict observation:", obs)
+            print("Predict observation:", obs["current_assignment"])
 
     ### PREDICTION END ###
     
@@ -178,3 +195,17 @@ if __name__ == "__main__":
     )
 
     print(f"Optimal placement was {optimal} with reward {optimal_reward}")
+    
+    
+    exec_result = {
+        'config': f"PPO_{config_file}",
+        'episodes': data["Hyperparameters"]["n_episodes"],
+        'time': end_time-start_time,
+        'best_found': unwrapped.best_found.tolist(),
+        'optimal': data["Benchmark"]["optimal_mapping"],
+        'best_found_reward': unwrapped.best_reward,
+        'optimal_reward': optimal_reward
+    }
+    
+    json_manager = JsonManager("results_collection.json")
+    json_manager.update_data(None, exec_result)
