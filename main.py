@@ -5,12 +5,16 @@ import signal
 import sys
 import time
 
-from sb3_contrib import MaskablePPO
+from sb3_contrib import MaskablePPO, RecurrentPPO
 from sb3_contrib.common.wrappers import ActionMasker
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask, count_communications
 from callbacks.entropy_callback import EntropyCallback
 from callbacks.tb_log_callback import TensorboardLogCallback
+
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.env_util import make_vec_env
+from stable_baselines3.common.vec_env import VecFrameStack, DummyVecEnv, SubprocVecEnv
 
 from results.write_results import JsonManager
 
@@ -20,6 +24,8 @@ from stable_baselines3.common.callbacks import CallbackList
 
 signal_count = 0
 model = None
+
+NUM_ENVS = 4
 
 def signal_handler(sig, frame):
     global signal_count
@@ -69,13 +75,20 @@ def init_env(data):
 
     
     node_capacity = data["Graph"]["capacity"]
-    np_node_capacity = np.array(node_capacity)    
+    np_node_capacity = np.array(node_capacity)
+    
+    def vectorize():
+        env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
+        env = ActionMasker(env, action_mask_fn=mask)
+        return Monitor(env)
+    
+    
+    env = DummyVecEnv([lambda: vectorize() for _ in range(4)])
+    # env = VecFrameStack(env, n_stack=4)
+    
+    
 
-    env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
-
-    unwrapped = env
-    env = ActionMasker(env, action_mask_fn=mask)
-    return env, unwrapped
+    return env, env.unwrapped
 
 def get_total_steps(data):
     P = data["Graph"]["P"]
@@ -94,9 +107,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args = vars(args)
     config_file = args["graph_config"]
+    
+
 
     data = load_config(config_file)
     env, unwrapped = init_env(data)
+    
+    
     
     P = data["Graph"]["P"]
     total_steps = get_total_steps(data=data)
@@ -107,23 +124,23 @@ if __name__ == "__main__":
     
     callbacks = CallbackList([entropy_scheduler, logger_callback])
 
-    model = MaskablePPO(
+    model = RecurrentPPO(
         #policy=MaskableActorCriticPolicy,
-        policy="MultiInputPolicy",
+        policy="MultiInputLstmPolicy",
         env=env,
-        learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
+        #learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
         tensorboard_log="./newobs",
         verbose=1,
         device="cpu",
 
-        # 
-        clip_range= lrsched(lr0=0.8, lr1=0.1, decay_rate=2.5),
-        ent_coef= ent_start,
         
-        gamma=0.989,
-        #n_steps=8192,
+        clip_range= lrsched(lr0=1, lr1=0.01, decay_rate=0.5),
+        #ent_coef= ent_start,
+        
+        gamma=0.998,
+        #n_steps=4,
         #n_epochs=40,
-        gae_lambda=0.97,
+        #gae_lambda=0.97,
         #batch_size=256
         
     )
@@ -143,7 +160,9 @@ if __name__ == "__main__":
     # #model.gamma = 0.98 # Factor de descuento de recompensas futuras
 
     start_time = time.time()
-    trained = model.learn(total_timesteps=total_steps, log_interval=1, callback= callbacks, tb_log_name="PPO_clip_entropy_sched")
+    trained = model.learn(total_timesteps=total_steps, log_interval=1, 
+                        callback= callbacks, 
+                        tb_log_name="PPO_clip_entropy_sched")
     end_time = time.time()
     
     
@@ -151,23 +170,46 @@ if __name__ == "__main__":
 
     del trained
 
-    trained = MaskablePPO.load(f"./models/newobs/last.{config_file}.model")
+    #trained = MaskablePPO.load(f"./models/newobs/last.{config_file}.model")
     
     ### PREDICTION ###
 
     terminated = False
     truncated = False
+    
+    # P = data["Graph"]["P"]
+    # M = data["Graph"]["M"]
+    # reward_type, _, render_freq = get_render_config(data)
+    # edges = data["Graph"]["comms"]["edges"]
+    # volume = data["Graph"]["comms"]["volume"]
+    # n_msgs = data["Graph"]["comms"]["n_msgs"]
+    
+    # node_capacity = data["Graph"]["capacity"]
+    # np_node_capacity = np.array(node_capacity)
 
-    obs, info = env.reset()
-    while not terminated:
-        obs, info = env.reset()
-        truncated = False
-        while not (terminated or truncated):
-            action, _ = trained.predict(observation=obs, deterministic=True, action_masks=env.action_masks())
-            obs, reward, terminated, truncated, info = env.step(action)
-            print("Predict observation:", obs["current_assignment"])
+    # adj_matrix = init_matrix(P, edges, volume, n_msgs, reward_type)
+    
+    # env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
+    # unwrapped = env
+    # env = ActionMasker(env, action_mask_fn=mask)
+    
+    terminated = [False] * env.num_envs
+
+    obs = env.reset()
+    while not all(terminated):
+        #obs = env.reset()
+        action_masks = [env.envs[i].action_masks() for i in range(env.num_envs)]
+        action, _ = trained.predict(observation=obs, deterministic=True)#, action_masks=action_masks)
+        obs, reward, terminated, info = env.step(action)
+        #print("Predict observation:", obs["current_assignment"])
+        for i, done in enumerate(terminated):
+            if done:
+                final_obs = {key: value[i] for key, value in obs.items()}
+                print(f"Final observation for environment {i}: {final_obs['current_assignment']}")
 
     ### PREDICTION END ###
+    
+    exit()
     
     ### MODEL EVAL ###
 

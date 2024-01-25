@@ -5,10 +5,26 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "Binomial 4 2 SEQ",
             "type": "python",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
+            "args": [
+                "dataset/binomial_4_2_SEQ.json"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "Binomial 16 4 RR",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "dataset/binomial_16_4.json"
+            ],
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "justMyCode": false
         },

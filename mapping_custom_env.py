@@ -23,22 +23,26 @@ class CustomRLEnvironment(gym.Env):
         self.adj_matrix = adj_matrix
         self.n_msgs = n_msgs
         self.RENDER_FREQ = render_freq
+        
 
         obs_len = np.prod(adj_matrix.shape) + self.P
         
         # Initialize all processes unassigned
         self.NOT_ASSIGNED = self.M + 1
         self.current_assignment = np.full(self.P, self.NOT_ASSIGNED)
+        self.best_volume = np.full(self.P, np.inf)
         self.action_space = Discrete(self.M)
         #self.observation_space = Box(low=0, high=np.inf, shape=(obs_len,), dtype=np.float32)
         
         self.observation_space = Dict({
             'communication_matrix': Box(low=0, high=np.inf, shape=(self.adj_matrix.shape), dtype=np.float32),
-            'current_assignment': MultiDiscrete([self.M+2] * P),
-            'node_capacities': MultiDiscrete(self.node_capacity_init + 2),
+            # 'current_assignment': MultiDiscrete([self.M+2] * P),
+            # 'node_capacities': MultiDiscrete(self.node_capacity_init + 2),
+            'current_assignment': Box(low=0, high=self.M+2, shape=(self.current_assignment.shape), dtype=np.float32),
+            'node_capacities': Box(low=0, high=self.node_capacity_init+2, shape=(self.node_capacity_init.shape), dtype=np.float32),
             # 'total_processes': Discrete(1, start=self.P),
             # 'total_nodes': Discrete(1, start=self.M),
-            'current_process': Discrete(self.P, start=0)
+            #'current_process': Box(low=0, high=self.P+90)
         })
         
         self.total_comms = np.sum(adj_matrix) #len(self.adj_matrix)
@@ -51,8 +55,8 @@ class CustomRLEnvironment(gym.Env):
         self.ingraph_node_pos = None
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.renders_dir = os.path.join("./renders", timestamp)
-        if not os.path.exists(self.renders_dir):
-            os.makedirs(self.renders_dir)
+        # if not os.path.exists(self.renders_dir):
+        #     os.makedirs(self.renders_dir)
             
     @property
     def current_observation(self):
@@ -65,7 +69,7 @@ class CustomRLEnvironment(gym.Env):
             # 'total_processes': self.P,
             # 'total_nodes': self.M,
             
-            'current_process': self.current_process
+            #'current_process': self.current_process
         }
         # current = np.concatenate(
         #     [self.current_assignment, self.adj_matrix.flatten()]
@@ -99,10 +103,11 @@ class CustomRLEnvironment(gym.Env):
         else:
             print("truncate")
             truncated = True
+            return self.current_observation, -10, False, truncated, {}
         
         self.current_process += 1
 
-        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms)
+        reward = count_communications(self.current_assignment, self.adj_matrix, self.NOT_ASSIGNED, self.total_comms, self.best_volume)
         
         if(self.best_reward < reward):
             self.best_found = self.current_assignment.copy()
@@ -112,6 +117,7 @@ class CustomRLEnvironment(gym.Env):
         full_capacity = np.all(self.node_capacity == 0)
         all_assigned = np.all(self.current_assignment != (self.M + 1))
         done = full_capacity or all_assigned
+        #truncated = True if reward==0 else False
 
         if done:
             print(f"reward: {reward} obs: {self.current_assignment}")
@@ -146,6 +152,8 @@ class CustomRLEnvironment(gym.Env):
     def render(self, reward, mode="human"):
         if mode != "human":
             raise NotImplementedError(f"Render mode {mode} not implemented")
+        
+        return
 
         G = nx.Graph()
 
@@ -199,7 +207,7 @@ class CustomRLEnvironment(gym.Env):
 def mask(env: gym.Env) -> np.ndarray:
     return env.valid_action_mask()
 
-def count_communications(positions, adjacency_matrix, not_assigned, total_comms):
+def count_communications(positions, adjacency_matrix, not_assigned, total_comms, best_volume):
     positions_nulled = positions.copy()
     positions_nulled[positions_nulled == not_assigned] = -1
     positions_nulled += 1
@@ -214,7 +222,20 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms)
 
     communications_matrix = adjacency_matrix * mask
     
-    volume_count = np.sum(communications_matrix)    
+    volume_count = np.count_nonzero(communications_matrix)
+    
+    current = total_assigned -1
+    #print(f"current mapping at {current} volume is {volume_count}, best is {best_volume[current]}")
+    if best_volume[current] > volume_count:
+        best_volume[current] = volume_count
+        reward = 3
+    elif best_volume[current] == volume_count:
+        reward = 1
+    else:
+        reward = -3
+        
+    return reward #* total_assigned
+    
 
     if total_assigned < len(positions_nulled):
         reward =  0
