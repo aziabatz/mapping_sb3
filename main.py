@@ -11,6 +11,9 @@ from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from mapping_custom_env import CustomRLEnvironment, lrsched, mask, count_communications
 from callbacks.entropy_callback import EntropyCallback
 from callbacks.tb_log_callback import TensorboardLogCallback
+from embed import EmbedGraph
+
+from lstm_maskable_ppo.maskable_ppo_rnn import MaskableRecurrentPPO
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.env_util import make_vec_env
@@ -72,21 +75,21 @@ def init_env(data):
     n_msgs = data["Graph"]["comms"]["n_msgs"]
 
     adj_matrix = init_matrix(P, edges, volume, n_msgs, reward_type)
-
     
     node_capacity = data["Graph"]["capacity"]
     np_node_capacity = np.array(node_capacity)
     
+    embed = EmbedGraph(adj_matrix, normalize=True)
+    embed.fit_n2v()
+    embedded = embed.embeddings
+
     def vectorize():
-        env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
+        env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, embedded, render_freq)
         env = ActionMasker(env, action_mask_fn=mask)
         return Monitor(env)
     
     
-    env = DummyVecEnv([lambda: vectorize() for _ in range(4)])
-    # env = VecFrameStack(env, n_stack=4)
-    
-    
+    env = DummyVecEnv([lambda: vectorize() for _ in range(NUM_ENVS)])
 
     return env, env.unwrapped
 
@@ -109,104 +112,80 @@ if __name__ == "__main__":
     config_file = args["graph_config"]
     
 
-
     data = load_config(config_file)
     env, unwrapped = init_env(data)
-    
-    
     
     P = data["Graph"]["P"]
     total_steps = get_total_steps(data=data)
     
-    ent_start, ent_end = 0.25, 0.0
+    ent_start, ent_end = 0.75, 0.0
     entropy_scheduler = EntropyCallback(start=ent_start, end=ent_end, steps=total_steps, verbose=2)
     logger_callback = TensorboardLogCallback(verbose=0)
     
     callbacks = CallbackList([entropy_scheduler, logger_callback])
+    
+    policy_kwargs = dict(net_arch = dict(vf=[256, 256, P], pi=[256, 256, P]))
 
-    model = RecurrentPPO(
-        #policy=MaskableActorCriticPolicy,
-        policy="MultiInputLstmPolicy",
+    model = MaskableRecurrentPPO(
+        policy="MaskableMultiInputLstmPolicy",
+        #policy="MultiInputLstmPolicy",
         env=env,
-        #learning_rate=lrsched(lr0=0.0003, lr1=0.00000001, decay_rate=5),
         tensorboard_log="./newobs",
         verbose=1,
         device="cpu",
+        
+        n_steps = 128,
+        learning_rate=lrsched(lr1=0.003, lr0=0.00000001, decay_rate=2.5),
+        clip_range= lrsched(lr0=0.99, lr1=0.3, decay_rate=0.1),
+        ent_coef=ent_start,
+        gae_lambda=0.75,
+        
+        n_epochs=2,
+        
 
-        
-        clip_range= lrsched(lr0=1, lr1=0.01, decay_rate=0.5),
-        #ent_coef= ent_start,
-        
-        gamma=0.998,
-        #n_steps=4,
-        #n_epochs=40,
-        #gae_lambda=0.97,
-        #batch_size=256
-        
     )
-    
-    # model = MaskablePPO(
-    #     policy="MlpPolicy",
-    #     env=env,
-    #     tensorboard_log="./newobs",
-    #     verbose=1
-    # )
 
-    # model = MaskablePPO.load(f"last.{config_file}.model")
-    
-    # model.set_env(env, force_reset=True)
-    # model.learning_rate = lrsched(lr0=0.0003, lr1=0.0000003, decay_rate=0.3)
-    # model.ent_coef = 0.01 # coeficiente de entropia (mas alto mas exploracion)
-    # #model.gamma = 0.98 # Factor de descuento de recompensas futuras
 
     start_time = time.time()
     trained = model.learn(total_timesteps=total_steps, log_interval=1, 
                         callback= callbacks, 
-                        tb_log_name="PPO_clip_entropy_sched")
+                        tb_log_name="LSTM_MPPO")
     end_time = time.time()
     
     
     trained.save(f"./models/newobs/last.{config_file}.model")
-
-    del trained
-
-    #trained = MaskablePPO.load(f"./models/newobs/last.{config_file}.model")
     
     ### PREDICTION ###
-
-    terminated = False
+    
     truncated = False
-    
-    # P = data["Graph"]["P"]
-    # M = data["Graph"]["M"]
-    # reward_type, _, render_freq = get_render_config(data)
-    # edges = data["Graph"]["comms"]["edges"]
-    # volume = data["Graph"]["comms"]["volume"]
-    # n_msgs = data["Graph"]["comms"]["n_msgs"]
-    
-    # node_capacity = data["Graph"]["capacity"]
-    # np_node_capacity = np.array(node_capacity)
-
-    # adj_matrix = init_matrix(P, edges, volume, n_msgs, reward_type)
-    
-    # env = CustomRLEnvironment(P, M, np_node_capacity, adj_matrix, n_msgs, render_freq)
-    # unwrapped = env
-    # env = ActionMasker(env, action_mask_fn=mask)
     
     terminated = [False] * env.num_envs
 
-    obs = env.reset()
+    vec_env = model.get_env()
+    obs = vec_env.reset()
+    lstm_states = None
+    num_envs = NUM_ENVS
+    episode_starts = np.ones((num_envs,), dtype=bool)
+    info = None
+    
     while not all(terminated):
         #obs = env.reset()
         action_masks = [env.envs[i].action_masks() for i in range(env.num_envs)]
-        action, _ = trained.predict(observation=obs, deterministic=True)#, action_masks=action_masks)
-        obs, reward, terminated, info = env.step(action)
+        action, lstm_states = trained.predict(observation=obs, state=lstm_states, episode_start=episode_starts, deterministic=True, action_masks=action_masks)
+        # why environment reset on final step?!!!!!!
+        obs, reward, terminated, info = vec_env.step(action)
+        
         #print("Predict observation:", obs["current_assignment"])
-        for i, done in enumerate(terminated):
-            if done:
-                final_obs = {key: value[i] for key, value in obs.items()}
-                print(f"Final observation for environment {i}: {final_obs['current_assignment']}")
+        # for i, done in enumerate(terminated):
+        #     if done:
+        #         final_obs = {key: value[i] for key, value in obs.items()}
+        #         print(f"Final observation for environment {i}: {final_obs['current_assignment']}")
 
+    for i, done in enumerate(terminated):
+        if done:
+            episode_info = info[i]
+            print(f"Last observation for env {i} {info[i]['terminal_observation']['current_assignment']}")
+    
     ### PREDICTION END ###
     
     exit()

@@ -6,6 +6,7 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from gymnasium.spaces import Discrete, MultiDiscrete, Dict, Box
+from embed import EmbedGraph
 
 DEBUG = False
 NEGATIVE_INF = -float('inf')
@@ -13,7 +14,7 @@ NEGATIVE_INF = -float('inf')
 
 class CustomRLEnvironment(gym.Env):
 
-    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, render_freq=1000, seed=None):
+    def __init__(self, P, M, node_capacity, adj_matrix: np.ndarray, n_msgs, embedded_adj_matrix: np.ndarray = None, render_freq=1000, seed=None):
         super(CustomRLEnvironment, self).__init__()
         self.seed = seed
         self.P = P
@@ -24,6 +25,10 @@ class CustomRLEnvironment(gym.Env):
         self.n_msgs = n_msgs
         self.RENDER_FREQ = render_freq
         
+        if embedded_adj_matrix is not None:
+            self.embedded_adj_matrix = embedded_adj_matrix
+        else:
+            self.embedded_adj_matrix = self.adj_matrix
 
         obs_len = np.prod(adj_matrix.shape) + self.P
         
@@ -35,7 +40,7 @@ class CustomRLEnvironment(gym.Env):
         #self.observation_space = Box(low=0, high=np.inf, shape=(obs_len,), dtype=np.float32)
         
         self.observation_space = Dict({
-            'communication_matrix': Box(low=0, high=np.inf, shape=(self.adj_matrix.shape), dtype=np.float32),
+            'communication_matrix': Box(low=0, high=np.inf, shape=(self.embedded_adj_matrix.shape), dtype=np.float32),
             # 'current_assignment': MultiDiscrete([self.M+2] * P),
             # 'node_capacities': MultiDiscrete(self.node_capacity_init + 2),
             'current_assignment': Box(low=0, high=self.M+2, shape=(self.current_assignment.shape), dtype=np.float32),
@@ -61,7 +66,7 @@ class CustomRLEnvironment(gym.Env):
     @property
     def current_observation(self):
         current = {
-            'communication_matrix': self.adj_matrix,
+            'communication_matrix': self.embedded_adj_matrix,
             
             'current_assignment': self.current_assignment,
             'node_capacities': self.node_capacity,
@@ -222,29 +227,32 @@ def count_communications(positions, adjacency_matrix, not_assigned, total_comms,
 
     communications_matrix = adjacency_matrix * mask
     
-    volume_count = np.count_nonzero(communications_matrix)
+    volume_count = np.sum(communications_matrix)
     
     current = total_assigned -1
     #print(f"current mapping at {current} volume is {volume_count}, best is {best_volume[current]}")
     if best_volume[current] > volume_count:
+        if best_volume[current] == np.inf:
+            reward = 0
+        else:
+            reward = 3
         best_volume[current] = volume_count
-        reward = 3
     elif best_volume[current] == volume_count:
         reward = 1
     else:
-        reward = -3
+        reward = 0
         
     return reward #* total_assigned
     
 
     if total_assigned < len(positions_nulled):
-        reward =  0
+        reward =  total_comms/(volume_count+1)  #0
     else:
-        reward = total_comms/(volume_count+1)
+        reward = total_comms/(volume_count+1) 
         
     #reward = reward + total_assigned
     
-    return reward
+    return reward ** total_assigned
 
 def lrsched(lr0=10, lr1=0.000001, decay_rate=2.0):
     def reallr(progress):
